@@ -1,18 +1,21 @@
 /**
- * RFID Wareneinlagerung - Hauptanwendung für parallele Sessions
- * Ermöglicht mehreren Mitarbeitern gleichzeitig zu arbeiten
+ * RFID Qualitätskontrolle - Hauptanwendung für parallele Sessions
+ * Ermöglicht mehreren Mitarbeitern gleichzeitig zu arbeiten mit QC-spezifischer Logik
  */
 
-class WareneinlagerungApp {
+class QualityControlApp {
     constructor() {
         // PARALLELE SESSION-VERWALTUNG
         this.activeSessions = new Map(); // userId -> sessionData
         this.selectedSession = null; // Aktuell ausgewählte Session für QR-Scanning
         this.sessionTimers = new Map(); // userId -> timerInterval
 
-        // NEUE DATENSTRUKTUR: Getrennte Scan-Verwaltung pro Session
+        // QC-spezifische Komponenten
+        this.qualityControlManager = null;
+
+        // NEUE DATENSTRUKTUR: QC-Scan-Verwaltung
         this.currentScan = null; // Aktueller Scan (egal ob erfolgreich oder nicht)
-        this.successfulScans = []; // Alle erfolgreichen Scans (sitzungsübergreifend)
+        this.recentScans = []; // Alle aktuellen Scans (für Debugging)
 
         // QR-Scanner Status
         this.scannerActive = false;
@@ -37,12 +40,15 @@ class WareneinlagerungApp {
     }
 
     async init() {
-        console.log('🚀 Wareneinlagerung-App wird initialisiert...');
+        console.log('🚀 Qualitätskontrolle-App wird initialisiert...');
 
         this.setupEventListeners();
         this.setupIPCListeners();
         this.startClockUpdate();
         this.updateSystemInfo();
+
+        // QualityControl Manager initialisieren
+        this.qualityControlManager = new QualityControlManager(this);
 
         // Kamera-Verfügbarkeit prüfen
         await this.checkCameraAvailability();
@@ -50,7 +56,7 @@ class WareneinlagerungApp {
         // Periodisches Laden der aktiven Sessions
         this.startPeriodicSessionUpdate();
 
-        console.log('✅ Wareneinlagerung-App bereit');
+        console.log('✅ Qualitätskontrolle-App bereit');
     }
 
     // ===== EVENT LISTENERS =====
@@ -62,15 +68,6 @@ class WareneinlagerungApp {
 
         document.getElementById('stopScannerBtn').addEventListener('click', () => {
             this.stopQRScanner();
-        });
-
-        // Scans Management
-        document.getElementById('clearScansBtn').addEventListener('click', () => {
-            this.clearRecentScans();
-        });
-
-        document.getElementById('refreshScansBtn').addEventListener('click', () => {
-            this.refreshScans();
         });
 
         // Selected User Logout
@@ -187,7 +184,7 @@ class WareneinlagerungApp {
         console.log(`🔑 Benutzer-Anmeldung: ${user.BenutzerName} (Session ${session.ID})`);
 
         // Session zu lokaler Verwaltung hinzufügen
-        this.activeSessions.set(user.ID, {
+        const sessionData = {
             sessionId: session.ID,
             userId: user.ID,
             userName: user.BenutzerName,
@@ -195,10 +192,14 @@ class WareneinlagerungApp {
             startTime: new Date(session.StartTS),
             scanCount: 0,
             isActive: true
-        });
+        };
 
-        // Session-spezifische QR-Code-Duplikat-Erkennung initialisieren
-        this.sessionScannedCodes.set(session.ID, new Set());
+        this.activeSessions.set(user.ID, sessionData);
+
+        // QC-Manager über neue Session informieren
+        if (this.qualityControlManager) {
+            this.qualityControlManager.initializeSessionQC(session.ID);
+        }
 
         // Session-Timer starten
         this.startSessionTimer(user.ID);
@@ -209,7 +210,7 @@ class WareneinlagerungApp {
 
         // Spezielle Nachrichten für neue Sessions
         if (eventData.isNewSession) {
-            this.showNotification('success', 'Neue Session', `${user.BenutzerName} ist bereit zum Arbeiten!`);
+            this.showNotification('success', 'Neue QC-Session', `${user.BenutzerName} ist bereit für Qualitätskontrolle!`);
         } else {
             this.showNotification('success', 'Angemeldet', `${user.BenutzerName} ist bereit!`);
         }
@@ -221,17 +222,18 @@ class WareneinlagerungApp {
     async handleUserLogout(user, eventData = {}) {
         console.log(`👋 Benutzer-Abmeldung: ${user.BenutzerName}`);
 
+        const sessionData = this.activeSessions.get(user.ID);
+
+        // QC-Manager über Session-Ende informieren
+        if (this.qualityControlManager && sessionData) {
+            this.qualityControlManager.onUserLoggedOut(sessionData);
+        }
+
         // Session aus lokaler Verwaltung entfernen
         this.activeSessions.delete(user.ID);
 
         // Session-Timer stoppen
         this.stopSessionTimer(user.ID);
-
-        // Session-spezifische QR-Codes entfernen
-        const userSession = Array.from(this.activeSessions.values()).find(s => s.userId === user.ID);
-        if (userSession) {
-            this.sessionScannedCodes.delete(userSession.sessionId);
-        }
 
         // Falls ausgewählte Session, Auswahl zurücksetzen
         if (this.selectedSession && this.selectedSession.userId === user.ID) {
@@ -258,6 +260,11 @@ class WareneinlagerungApp {
             // Timer neu starten
             this.stopSessionTimer(data.user.ID);
             this.startSessionTimer(data.user.ID);
+
+            // QC-Manager über Session-Restart informieren
+            if (this.qualityControlManager) {
+                this.qualityControlManager.onSessionRestarted(session);
+            }
         }
 
         // UI aktualisieren
@@ -268,7 +275,7 @@ class WareneinlagerungApp {
             this.updateSelectedUserDisplay();
         }
 
-        this.showNotification('info', 'Session neu gestartet', `${data.user.BenutzerName}: Timer zurückgesetzt`);
+        this.showNotification('info', 'QC-Session neu gestartet', `${data.user.BenutzerName}: Timer zurückgesetzt, QC-Status zurückgesetzt`);
     }
 
     handleSessionTimerUpdate(data) {
@@ -358,6 +365,13 @@ class WareneinlagerungApp {
             for (const userId of localUserIds) {
                 if (!backendUserIds.has(userId)) {
                     console.log(`Session für Benutzer ${userId} nicht mehr aktiv - entferne lokal`);
+                    const sessionData = this.activeSessions.get(userId);
+
+                    // QC-Manager informieren
+                    if (this.qualityControlManager && sessionData) {
+                        this.qualityControlManager.cleanupSessionQC(sessionData.sessionId);
+                    }
+
                     this.activeSessions.delete(userId);
                     this.stopSessionTimer(userId);
                 }
@@ -368,7 +382,7 @@ class WareneinlagerungApp {
                 if (!localUserIds.has(backendSession.UserID)) {
                     console.log(`Neue Session gefunden für Benutzer ${backendSession.UserID}`);
 
-                    this.activeSessions.set(backendSession.UserID, {
+                    const sessionData = {
                         sessionId: backendSession.ID,
                         userId: backendSession.UserID,
                         userName: backendSession.UserName || 'Unbekannt',
@@ -376,13 +390,17 @@ class WareneinlagerungApp {
                         startTime: new Date(backendSession.StartTS),
                         scanCount: backendSession.ScanCount || 0,
                         isActive: true
-                    });
+                    };
+
+                    this.activeSessions.set(backendSession.UserID, sessionData);
+
+                    // QC-Manager über neue Session informieren
+                    if (this.qualityControlManager) {
+                        this.qualityControlManager.initializeSessionQC(backendSession.ID);
+                    }
 
                     // Session-Timer starten
                     this.startSessionTimer(backendSession.UserID);
-
-                    // Session-spezifische QR-Code-Duplikat-Erkennung
-                    this.sessionScannedCodes.set(backendSession.ID, new Set());
                 }
             }
 
@@ -422,6 +440,12 @@ class WareneinlagerungApp {
         const duration = utils.calculateSessionDuration(session.startTime);
         const isSelected = this.selectedSession && this.selectedSession.userId === session.userId;
 
+        // QC-Status abrufen
+        let qcStatus = { activeStepCount: 0, completedStepCount: 0 };
+        if (this.qualityControlManager) {
+            qcStatus = this.qualityControlManager.getQCStatus(session.sessionId);
+        }
+
         return `
             <div class="user-card ${isSelected ? 'selected' : ''}" 
                  data-user-id="${session.userId}" 
@@ -432,7 +456,10 @@ class WareneinlagerungApp {
                         <div class="user-name">${session.userName}</div>
                         <div class="user-department">${session.department}</div>
                         <div class="user-timer">${utils.formatDuration(duration)}</div>
-                        <div class="user-scans">${session.scanCount} Scans</div>
+                        <div class="user-qc-status">
+                            <span class="qc-active">🔄 ${qcStatus.activeStepCount}</span>
+                            <span class="qc-completed">✅ ${qcStatus.completedStepCount}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="user-actions">
@@ -509,8 +536,10 @@ class WareneinlagerungApp {
         this.updateSelectedUserDisplay();
         this.updateScannerInfo();
 
-        // Scan-Historie für ausgewählten Benutzer laden
-        this.refreshScansForSelectedUser();
+        // QC-Manager über Benutzer-Auswahl informieren
+        if (this.qualityControlManager) {
+            this.qualityControlManager.onUserSelected(session);
+        }
 
         console.log(`Benutzer ausgewählt: ${session.userName} (Session ${session.sessionId})`);
     }
@@ -527,6 +556,12 @@ class WareneinlagerungApp {
 
         document.getElementById('selectedUserName').textContent = this.selectedSession.userName;
         document.getElementById('selectedSessionScans').textContent = this.selectedSession.scanCount;
+
+        // QC-Status anzeigen
+        if (this.qualityControlManager) {
+            const qcStatus = this.qualityControlManager.getQCStatus(this.selectedSession.sessionId);
+            document.getElementById('selectedActiveQCSteps').textContent = qcStatus.activeStepCount;
+        }
 
         this.updateSelectedSessionTimer();
     }
@@ -609,8 +644,8 @@ class WareneinlagerungApp {
             );
 
             if (success) {
-                this.showNotification('success', 'Session neu gestartet',
-                    `${this.restartSession.userName}: Timer zurückgesetzt`);
+                this.showNotification('success', 'QC-Session neu gestartet',
+                    `${this.restartSession.userName}: Timer und QC-Status zurückgesetzt`);
             } else {
                 this.showNotification('error', 'Fehler', 'Session-Restart fehlgeschlagen');
             }
@@ -705,7 +740,7 @@ class WareneinlagerungApp {
             this.updateScannerUI();
             this.startQRScanLoop();
 
-            this.showNotification('success', 'Scanner bereit',
+            this.showNotification('success', 'QC-Scanner bereit',
                 `QR-Codes werden für ${this.selectedSession.userName} erkannt`);
 
         } catch (error) {
@@ -897,7 +932,7 @@ class WareneinlagerungApp {
         if (this.scannerActive) {
             startBtn.style.display = 'none';
             stopBtn.style.display = 'inline-flex';
-            statusText.textContent = `Scanner aktiv für ${this.selectedSession?.userName || 'Unbekannt'}`;
+            statusText.textContent = `QC-Scanner aktiv für ${this.selectedSession?.userName || 'Unbekannt'}`;
             cameraStatus.style.display = 'none';
         } else {
             startBtn.style.display = 'inline-flex';
@@ -907,7 +942,7 @@ class WareneinlagerungApp {
         }
     }
 
-    // ===== QR-CODE VERARBEITUNG FÜR PARALLELE SESSIONS =====
+    // ===== QR-CODE VERARBEITUNG FÜR QUALITÄTSKONTROLLE =====
     async handleQRCodeDetected(qrData) {
         const now = Date.now();
 
@@ -942,7 +977,7 @@ class WareneinlagerungApp {
         this.pendingScans.add(qrData);
         this.recentlyScanned.set(qrData, now);
 
-        console.log(`📄 QR-Code erkannt für ${this.selectedSession.userName}:`, qrData);
+        console.log(`📄 QR-Code erkannt für QC ${this.selectedSession.userName}:`, qrData);
 
         try {
             // In Datenbank speichern für ausgewählte Session
@@ -950,6 +985,11 @@ class WareneinlagerungApp {
 
             // Scan-Ergebnis verarbeiten
             this.handleScanResult(result, qrData);
+
+            // QC-Manager über Scan informieren
+            if (this.qualityControlManager) {
+                await this.qualityControlManager.processScan(this.selectedSession.sessionId, qrData, result);
+            }
 
         } catch (error) {
             console.error('QR-Code Verarbeitung fehlgeschlagen:', error);
@@ -975,17 +1015,9 @@ class WareneinlagerungApp {
     handleScanResult(result, qrData) {
         const { success, status, message, data, duplicateInfo } = result;
 
-        console.log('QR-Scan Ergebnis:', { success, status, message, session: this.selectedSession.userName });
+        console.log('QC-Scan Ergebnis:', { success, status, message, session: this.selectedSession.userName });
 
-        // Dekodierte Daten extrahieren falls verfügbar
-        let decodedData = null;
-        if (data && data.DecodedData) {
-            decodedData = data.DecodedData;
-        } else if (data && data.ParsedPayload && data.ParsedPayload.decoded) {
-            decodedData = data.ParsedPayload.decoded;
-        }
-
-        // 1. AKTUELLER SCAN: Jeden Scan anzeigen
+        // Aktueller Scan für Display
         this.currentScan = {
             id: data?.ID || `temp_${Date.now()}`,
             timestamp: new Date(),
@@ -996,59 +1028,29 @@ class WareneinlagerungApp {
             status: status,
             message: message,
             success: success,
-            duplicateInfo: duplicateInfo,
-            decodedData: decodedData
+            duplicateInfo: duplicateInfo
         };
 
-        this.updateCurrentScanDisplay();
-
-        // 2. ERFOLGREICHE SCANS: Nur erfolgreiche Scans zur Tabelle hinzufügen
-        if (success && decodedData) {
-            // Session-spezifische Duplikat-Prüfung
-            const sessionCodes = this.sessionScannedCodes.get(this.selectedSession.sessionId) || new Set();
-
-            if (!sessionCodes.has(qrData)) {
-                sessionCodes.add(qrData);
-                this.sessionScannedCodes.set(this.selectedSession.sessionId, sessionCodes);
-
-                this.addToSuccessfulScans({
-                    id: data.ID,
-                    timestamp: new Date(),
-                    content: qrData,
-                    user: this.selectedSession.userName,
-                    userId: this.selectedSession.userId,
-                    sessionId: this.selectedSession.sessionId,
-                    decodedData: decodedData
-                });
-
-                // Session-Scan-Count aktualisieren
-                this.selectedSession.scanCount++;
-                this.updateSelectedUserDisplay();
-                this.updateActiveUsersDisplay();
-
-                console.log(`✅ Erfolgreicher Scan zur Tabelle hinzugefügt für ${this.selectedSession.userName}`);
-            } else {
-                console.log(`🔄 Erfolgreicher Scan bereits in Session-Tabelle vorhanden`);
-            }
+        // Session-Scan-Count aktualisieren
+        if (success) {
+            this.selectedSession.scanCount++;
+            this.updateSelectedUserDisplay();
+            this.updateActiveUsersDisplay();
         }
 
-        // 3. VISUAL FEEDBACK je nach Status
+        // Visual Feedback je nach Status
         if (success) {
             this.globalScannedCodes.add(qrData);
             this.showScanSuccess(qrData, 'success');
 
-            // Erweiterte Nachricht mit dekodierten Daten
+            // QC-spezifische Nachricht
             let enhancedMessage = message;
-            if (decodedData) {
-                const parts = [];
-                if (decodedData.auftrags_nr) parts.push(`Auftrag: ${decodedData.auftrags_nr}`);
-                if (decodedData.paket_nr) parts.push(`Paket: ${decodedData.paket_nr}`);
-                if (parts.length > 0) {
-                    enhancedMessage = `${this.selectedSession.userName}: ${parts.join(', ')}`;
-                }
+            if (this.qualityControlManager) {
+                const qcStatus = this.qualityControlManager.getQCStatus(this.selectedSession.sessionId);
+                enhancedMessage = `${this.selectedSession.userName}: QC-${qcStatus.expectedScan} erfolgreich`;
             }
 
-            this.showNotification('success', 'QR-Code gespeichert', enhancedMessage);
+            this.showNotification('success', 'QC-Scan gespeichert', enhancedMessage);
         } else {
             // Verschiedene Fehler/Duplikat-Typen
             switch (status) {
@@ -1057,7 +1059,7 @@ class WareneinlagerungApp {
                 case 'duplicate_transaction':
                     this.globalScannedCodes.add(qrData);
                     this.showScanSuccess(qrData, 'duplicate');
-                    this.showNotification('error', 'Duplikat erkannt', `${this.selectedSession.userName}: ${message}`);
+                    this.showNotification('error', 'QC-Duplikat erkannt', `${this.selectedSession.userName}: ${message}`);
                     break;
 
                 case 'rate_limit':
@@ -1074,7 +1076,7 @@ class WareneinlagerungApp {
                 case 'error':
                 default:
                     this.showScanSuccess(qrData, 'error');
-                    this.showNotification('error', 'Fehler', message);
+                    this.showNotification('error', 'QC-Fehler', message);
                     break;
             }
         }
@@ -1091,7 +1093,7 @@ class WareneinlagerungApp {
         // CSS-Klassen je nach Typ
         const feedbackClasses = {
             success: 'scan-feedback-success',
-            duplicate: 'scan-feedback-error', // Duplikate jetzt rot
+            duplicate: 'scan-feedback-error',
             warning: 'scan-feedback-duplicate',
             error: 'scan-feedback-error',
             info: 'scan-feedback-success'
@@ -1120,17 +1122,18 @@ class WareneinlagerungApp {
 
             // Töne je nach Status
             if (type === 'success') {
-                oscillator.frequency.setValueAtTime(800, context.currentTime);
-                oscillator.frequency.setValueAtTime(1000, context.currentTime + 0.1);
+                // QC-Success: Höherer, klarerer Ton
+                oscillator.frequency.setValueAtTime(900, context.currentTime);
+                oscillator.frequency.setValueAtTime(1200, context.currentTime + 0.1);
                 gainNode.gain.setValueAtTime(0.3, context.currentTime);
                 gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.3);
                 oscillator.start(context.currentTime);
                 oscillator.stop(context.currentTime + 0.3);
             } else if (type === 'duplicate') {
-                // BEMERKBARER DUPLIKAT-SOUND: Längerer, tieferer, dringenderer Ton
-                oscillator.frequency.setValueAtTime(400, context.currentTime);
-                oscillator.frequency.setValueAtTime(350, context.currentTime + 0.2);
-                oscillator.frequency.setValueAtTime(400, context.currentTime + 0.4);
+                // QC-Duplikat: Dringender Warnton
+                oscillator.frequency.setValueAtTime(300, context.currentTime);
+                oscillator.frequency.setValueAtTime(250, context.currentTime + 0.2);
+                oscillator.frequency.setValueAtTime(300, context.currentTime + 0.4);
                 gainNode.gain.setValueAtTime(0.5, context.currentTime);
                 gainNode.gain.exponentialRampToValueAtTime(0.01, context.currentTime + 0.6);
                 oscillator.start(context.currentTime);
@@ -1153,199 +1156,6 @@ class WareneinlagerungApp {
         } catch (error) {
             // Sound-Fehler ignorieren
             console.log('Sound-Feedback nicht verfügbar');
-        }
-    }
-
-    // ===== CURRENT SCAN DISPLAY =====
-    updateCurrentScanDisplay() {
-        const currentScanDisplay = document.getElementById('currentScanDisplay');
-        const currentScanTime = document.getElementById('currentScanTime');
-        const currentScanStatus = document.getElementById('currentScanStatus');
-        const currentScanContent = document.getElementById('currentScanContent');
-        const currentScanMessage = document.getElementById('currentScanMessage');
-
-        if (!this.currentScan) {
-            currentScanDisplay.style.display = 'none';
-            return;
-        }
-
-        const scan = this.currentScan;
-        const timeString = scan.timestamp.toLocaleTimeString('de-DE');
-        const statusInfo = this.getScanStatusInfo(scan);
-
-        // CSS-Klasse für Status
-        currentScanDisplay.className = `current-scan-display ${statusInfo.cssClass}`;
-        currentScanDisplay.style.display = 'block';
-
-        // Inhalt aktualisieren
-        currentScanTime.textContent = timeString;
-        currentScanStatus.innerHTML = `
-            <span class="status-icon">${statusInfo.icon}</span>
-            <span class="status-text" style="color: ${statusInfo.color};">${statusInfo.label}</span>
-            <span class="scan-user">${scan.user}</span>
-        `;
-
-        // QR-Code Inhalt (gekürzt für bessere Übersicht)
-        const contentPreview = scan.content.length > 150 ?
-            scan.content.substring(0, 150) + '...' : scan.content;
-        currentScanContent.textContent = contentPreview;
-
-        currentScanMessage.textContent = scan.message;
-    }
-
-    // ===== SUCCESSFUL SCANS TABLE =====
-    addToSuccessfulScans(scan) {
-        this.successfulScans.unshift(scan);
-
-        // Maximal 100 erfolgreiche Scans behalten (mehr da parallele Sessions)
-        if (this.successfulScans.length > 100) {
-            this.successfulScans = this.successfulScans.slice(0, 100);
-        }
-
-        this.updateSuccessfulScansTable();
-    }
-
-    updateSuccessfulScansTable() {
-        const tableBody = document.getElementById('successScansTableBody');
-        const emptyMessage = document.getElementById('emptySuccessScans');
-        const tableContainer = document.querySelector('.success-scans-table-container table');
-
-        if (this.successfulScans.length === 0) {
-            tableContainer.style.display = 'none';
-            emptyMessage.style.display = 'block';
-            return;
-        }
-
-        tableContainer.style.display = 'table';
-        emptyMessage.style.display = 'none';
-
-        const rowsHtml = this.successfulScans.map(scan => {
-            const timeString = scan.timestamp.toLocaleTimeString('de-DE');
-            const decoded = scan.decodedData || {};
-
-            return `
-                <tr>
-                    <td class="scan-time-col">${timeString}</td>
-                    <td class="user-col">${scan.user}</td>
-                    <td class="auftrag-col">${decoded.auftrags_nr || '-'}</td>
-                    <td class="kunde-col">${decoded.kunden_name || decoded.kunden_id || '-'}</td>
-                    <td class="paket-col">${decoded.paket_nr || '-'}</td>
-                </tr>
-            `;
-        }).join('');
-
-        tableBody.innerHTML = rowsHtml;
-    }
-
-    async refreshScansForSelectedUser() {
-        if (!this.selectedSession) return;
-
-        try {
-            const scans = await window.electronAPI.qr.getDecodedScans(this.selectedSession.sessionId, 50);
-
-            // Erfolgreiche Scans für ausgewählten Benutzer aktualisieren
-            this.successfulScans = this.successfulScans.filter(s => s.sessionId !== this.selectedSession.sessionId);
-
-            scans.forEach(scan => {
-                this.addToSuccessfulScans({
-                    id: scan.ID,
-                    timestamp: new Date(scan.ScanTime),
-                    content: scan.QrCode,
-                    user: this.selectedSession.userName,
-                    userId: this.selectedSession.userId,
-                    sessionId: this.selectedSession.sessionId,
-                    decodedData: scan.DecodedData
-                });
-            });
-
-            console.log(`Scan-Historie für ${this.selectedSession.userName} aktualisiert: ${scans.length} Scans`);
-        } catch (error) {
-            console.error('Fehler beim Aktualisieren der Scan-Historie:', error);
-        }
-    }
-
-    async refreshScans() {
-        if (this.selectedSession) {
-            await this.refreshScansForSelectedUser();
-            this.showNotification('info', 'Aktualisiert', 'Scan-Historie wurde aktualisiert');
-        }
-    }
-
-    clearRecentScans() {
-        // Current Scan zurücksetzen
-        this.currentScan = null;
-        this.updateCurrentScanDisplay();
-
-        // Erfolgreiche Scans löschen (alle oder nur für ausgewählten Benutzer)
-        if (this.selectedSession) {
-            this.successfulScans = this.successfulScans.filter(s => s.sessionId !== this.selectedSession.sessionId);
-            this.showNotification('info', 'Scans geleert', `Scan-Historie für ${this.selectedSession.userName} wurde geleert`);
-        } else {
-            this.successfulScans = [];
-            this.showNotification('info', 'Scans geleert', 'Komplette Scan-Historie wurde geleert');
-        }
-
-        this.updateSuccessfulScansTable();
-        console.log('🗑️ Scan-Historie manuell geleert');
-    }
-
-    getScanStatusInfo(scan) {
-        const { success, status, duplicateInfo } = scan;
-
-        if (success) {
-            return {
-                cssClass: 'scan-success',
-                icon: '✅',
-                label: 'Gespeichert',
-                color: '#28a745'
-            };
-        }
-
-        switch (status) {
-            case 'duplicate_cache':
-            case 'duplicate_database':
-            case 'duplicate_transaction':
-                const timeInfo = duplicateInfo?.minutesAgo ?
-                    ` (vor ${duplicateInfo.minutesAgo} Min)` : '';
-                return {
-                    cssClass: 'scan-duplicate',
-                    icon: '🚫',
-                    label: `Duplikat${timeInfo}`,
-                    color: '#dc3545' // ROT statt gelb
-                };
-
-            case 'rate_limit':
-                return {
-                    cssClass: 'scan-error',
-                    icon: '🚫',
-                    label: 'Rate Limit',
-                    color: '#fd7e14'
-                };
-
-            case 'processing':
-                return {
-                    cssClass: 'scan-info',
-                    icon: '🔄',
-                    label: 'Verarbeitung',
-                    color: '#17a2b8'
-                };
-
-            case 'database_offline':
-                return {
-                    cssClass: 'scan-error',
-                    icon: '💾',
-                    label: 'DB Offline',
-                    color: '#dc3545'
-                };
-
-            case 'error':
-            default:
-                return {
-                    cssClass: 'scan-error',
-                    icon: '❌',
-                    label: 'Fehler',
-                    color: '#dc3545'
-                };
         }
     }
 
@@ -1485,34 +1295,34 @@ class WareneinlagerungApp {
 
 // ===== APP INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🏁 DOM geladen, starte Wareneinlagerung-App...');
-    window.wareneinlagerungApp = new WareneinlagerungApp();
+    console.log('🏁 DOM geladen, starte Qualitätskontrolle-App...');
+    window.qualityControlApp = new QualityControlApp();
 });
 
 // Cleanup beim Fenster schließen
 window.addEventListener('beforeunload', () => {
-    if (window.wareneinlagerungApp && window.wareneinlagerungApp.scannerActive) {
-        window.wareneinlagerungApp.stopQRScanner();
+    if (window.qualityControlApp && window.qualityControlApp.scannerActive) {
+        window.qualityControlApp.stopQRScanner();
     }
 });
 
 // Global verfügbare Funktionen
 window.app = {
     showNotification: (type, title, message) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.showNotification(type, title, message);
+        if (window.qualityControlApp) {
+            window.qualityControlApp.showNotification(type, title, message);
         }
     },
 
     selectUser: (userId) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.selectUser(userId);
+        if (window.qualityControlApp) {
+            window.qualityControlApp.selectUser(userId);
         }
     },
 
     restartSession: (userId, sessionId) => {
-        if (window.wareneinlagerungApp) {
-            window.wareneinlagerungApp.showSessionRestartModal(userId, sessionId);
+        if (window.qualityControlApp) {
+            window.qualityControlApp.showSessionRestartModal(userId, sessionId);
         }
     }
 };

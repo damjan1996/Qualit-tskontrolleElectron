@@ -11,7 +11,7 @@
         img-src 'self' blob: data: https:;
         style-src 'self' 'unsafe-inline';
     ">
-    <title>RFID Wareneinlagerung - Shirtful</title>
+    <title>RFID Qualitätskontrolle - Shirtful</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
 <header class="main-header">
     <div class="header-content">
         <div class="company-info">
-            <h1 class="app-title">📦 Wareneinlagerung</h1>
+            <h1 class="app-title">🔍 Qualitätskontrolle</h1>
             <div class="company-name">Shirtful GmbH</div>
         </div>
 
@@ -48,6 +48,7 @@
             <div class="login-info">
                 <p>💡 Mehrere Mitarbeiter können gleichzeitig arbeiten</p>
                 <p>🔄 Erneutes Scannen startet Ihre Session neu</p>
+                <p>📦 QR-Codes werden zweimal gescannt: Eingang → Ausgang</p>
             </div>
         </div>
     </section>
@@ -77,6 +78,7 @@
                         <div class="user-session-info">
                             <span class="session-time" id="selectedSessionTime">00:00:00</span>
                             <span class="session-scans">• <span id="selectedSessionScans">0</span> Scans</span>
+                            <span class="active-qc-steps">• <span id="selectedActiveQCSteps">0</span> aktive Prüfungen</span>
                         </div>
                     </div>
                     <div class="user-actions">
@@ -94,6 +96,10 @@
                     <h3>📸 QR-Code Scanner</h3>
                     <div class="scanner-info-bar">
                         <span id="scannerUserInfo">Wählen Sie einen Mitarbeiter aus</span>
+                        <div class="scan-status-indicator" id="scanStatusIndicator">
+                            <span class="status-icon">📄</span>
+                            <span class="status-text">Bereit für ersten Scan</span>
+                        </div>
                     </div>
                     <div class="scanner-controls">
                         <button class="btn-primary" id="startScannerBtn">
@@ -131,55 +137,69 @@
                         <span class="info-value" id="scannerStatusText">Bereit</span>
                     </div>
                     <div class="info-row">
+                        <span class="info-label">Erwarteter Scan:</span>
+                        <span class="info-value" id="expectedScanType">Eingang</span>
+                    </div>
+                    <div class="info-row">
                         <span class="info-label">Letzter Scan:</span>
                         <span class="info-value" id="lastScanTime">-</span>
                     </div>
                 </div>
             </div>
 
-            <!-- QR-Scans Übersicht -->
-            <div class="recent-scans-section">
-                <div class="scans-header">
-                    <h3>📋 QR-Scans</h3>
-                    <div class="scans-controls">
-                        <button class="btn-secondary btn-small" id="clearScansBtn">🗑️ Leeren</button>
-                        <button class="btn-secondary btn-small" id="refreshScansBtn">🔄 Aktualisieren</button>
-                    </div>
-                </div>
-
-                <!-- Aktueller Scan -->
-                <div class="current-scan-display" id="currentScanDisplay" style="display: none;">
-                    <div class="current-scan-header">
-                        <span class="current-scan-time" id="currentScanTime">--:--:--</span>
-                        <span class="current-scan-status" id="currentScanStatus">
-                            <span class="status-icon">📄</span>
-                            <span class="status-text">Aktueller Scan</span>
+            <!-- Qualitätskontrollschritte Übersicht -->
+            <div class="quality-control-section">
+                <div class="qc-header">
+                    <h3>🔍 Qualitätskontrollschritte</h3>
+                    <div class="qc-stats">
+                        <span class="stat-item">
+                            <span class="stat-label">Aktiv:</span>
+                            <span class="stat-value" id="activeQCCount">0</span>
+                        </span>
+                        <span class="stat-item">
+                            <span class="stat-label">Abgeschlossen:</span>
+                            <span class="stat-value" id="completedQCCount">0</span>
                         </span>
                     </div>
-                    <div class="current-scan-content" id="currentScanContent">Noch kein QR-Code gescannt</div>
-                    <div class="current-scan-message" id="currentScanMessage">Scannen Sie einen QR-Code</div>
+                    <div class="qc-controls">
+                        <button class="btn-secondary btn-small" id="refreshQCBtn">🔄 Aktualisieren</button>
+                    </div>
                 </div>
 
-                <!-- Erfolgreich gescannte Pakete - Tabellenansicht -->
-                <div class="success-scans-table-container">
-                    <table class="success-scans-table" id="successScansTable">
-                        <thead>
-                        <tr>
-                            <th class="scan-time-col">Zeit</th>
-                            <th class="user-col">Mitarbeiter</th>
-                            <th class="auftrag-col">Auftrags-ID</th>
-                            <th class="kunde-col">Kunden-ID</th>
-                            <th class="paket-col">Paket-ID</th>
-                        </tr>
-                        </thead>
-                        <tbody id="successScansTableBody">
-                        <!-- Erfolgreiche Scans werden hier eingefügt -->
-                        </tbody>
-                    </table>
+                <!-- Aktive Qualitätskontrollschritte -->
+                <div class="active-qc-steps" id="activeQCSteps">
+                    <h4>🟡 Laufende Prüfungen</h4>
+                    <div class="qc-steps-list" id="activeQCStepsList">
+                        <div class="empty-qc-steps">
+                            <div class="empty-icon">🔍</div>
+                            <p>Keine laufenden Qualitätsprüfungen</p>
+                        </div>
+                    </div>
+                </div>
 
-                    <div class="empty-scans" id="emptySuccessScans">
-                        <div class="empty-icon">📦</div>
-                        <p>Noch keine Pakete erfolgreich gescannt</p>
+                <!-- Abgeschlossene Qualitätskontrollschritte -->
+                <div class="completed-qc-steps" id="completedQCSteps">
+                    <h4>✅ Abgeschlossene Prüfungen (Heute)</h4>
+                    <div class="qc-steps-table-container">
+                        <table class="qc-steps-table" id="completedQCStepsTable">
+                            <thead>
+                            <tr>
+                                <th class="qc-time-col">Start</th>
+                                <th class="qc-duration-col">Dauer</th>
+                                <th class="qc-user-col">Mitarbeiter</th>
+                                <th class="qc-code-col">QR-Code</th>
+                                <th class="qc-status-col">Status</th>
+                            </tr>
+                            </thead>
+                            <tbody id="completedQCStepsTableBody">
+                            <!-- Abgeschlossene QC-Schritte werden hier eingefügt -->
+                            </tbody>
+                        </table>
+
+                        <div class="empty-qc-steps" id="emptyCompletedQCSteps">
+                            <div class="empty-icon">📊</div>
+                            <p>Noch keine abgeschlossenen Prüfungen heute</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -191,7 +211,7 @@
 <footer class="main-footer">
     <div class="footer-content">
         <div class="footer-left">
-            <span id="instructionText">💡 RFID-Tag scannen = Anmelden • QR-Code scannen = Paket einlagern • Erneuter RFID-Scan = Session neu starten</span>
+            <span id="instructionText">💡 RFID-Tag scannen = Anmelden • QR-Code scannen = Qualitätsprüfung starten/beenden • Erneuter RFID-Scan = Session neu starten</span>
         </div>
         <div class="footer-right">
             <span id="versionText">v1.0.0</span>
@@ -255,7 +275,7 @@
         </div>
         <div class="modal-body">
             <p>Möchten Sie <strong id="logoutUserName"></strong> wirklich abmelden?</p>
-            <p class="modal-warning">Die Session wird beendet und alle ungespeicherten Daten gehen verloren.</p>
+            <p class="modal-warning">Die Session wird beendet und alle laufenden Qualitätsprüfungen werden abgebrochen.</p>
         </div>
         <div class="modal-footer">
             <button class="btn-danger" id="confirmLogout">Ja, abmelden</button>
@@ -276,7 +296,7 @@
         </div>
         <div class="modal-body">
             <p>Möchten Sie die Session von <strong id="restartUserName"></strong> neu starten?</p>
-            <p class="modal-info">Der Timer wird zurückgesetzt und die Session beginnt von vorne.</p>
+            <p class="modal-info">Der Timer wird zurückgesetzt und alle laufenden Qualitätsprüfungen werden abgebrochen.</p>
         </div>
         <div class="modal-footer">
             <button class="btn-primary" id="confirmSessionRestart">Ja, neu starten</button>
@@ -285,6 +305,28 @@
     </div>
 </div>
 
+<!-- QC Step Details Modal -->
+<div class="modal" id="qcStepModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title">
+                <span class="icon">🔍</span>
+                Qualitätskontrollschritt Details
+            </h3>
+            <button class="modal-close" id="qcStepModalClose">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="qc-step-details" id="qcStepDetails">
+                <!-- Details werden dynamisch gefüllt -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-secondary" id="qcStepModalClose2">Schließen</button>
+        </div>
+    </div>
+</div>
+
 <script src="app.js"></script>
+<script src="quality-control.js"></script>
 </body>
 </html>
