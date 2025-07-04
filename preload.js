@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Sichere API für Renderer Process - Wareneinlagerung
+// Sichere API für Renderer Process - Qualitätskontrolle
 contextBridge.exposeInMainWorld('electronAPI', {
     // ===== DATENBANK OPERATIONEN =====
     db: {
@@ -17,11 +17,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
         // Neue Session erstellen (ohne bestehende zu beenden)
         create: (userId) => ipcRenderer.invoke('session-create', userId),
 
-        // Session neu starten (Timer zurücksetzen)
+        // Session neu starten (Timer und QC-Status zurücksetzen)
         restart: (sessionId, userId) => ipcRenderer.invoke('session-restart', sessionId, userId),
 
         // Spezifische Session beenden
         end: (sessionId, userId) => ipcRenderer.invoke('session-end', sessionId, userId)
+    },
+
+    // ===== QUALITÄTSKONTROLLE OPERATIONEN =====
+    qualityControl: {
+        // QC-Schritt starten (Eingang-Scan)
+        startStep: (sessionId, qrCode, scanId) => ipcRenderer.invoke('quality-control-start-step', sessionId, qrCode, scanId),
+
+        // QC-Schritt abschließen (Ausgang-Scan)
+        completeStep: (sessionId, qrCode, scanId) => ipcRenderer.invoke('quality-control-complete-step', sessionId, qrCode, scanId),
+
+        // Aktive QC-Schritte für Session abrufen
+        getActiveSteps: (sessionId) => ipcRenderer.invoke('quality-control-get-active-steps', sessionId),
+
+        // Heute abgeschlossene QC-Schritte für Session abrufen
+        getCompletedStepsToday: (sessionId) => ipcRenderer.invoke('quality-control-get-completed-today', sessionId),
+
+        // QC-Schritt Details abrufen
+        getStepDetails: (stepId) => ipcRenderer.invoke('quality-control-get-step-details', stepId)
     },
 
     // ===== QR-CODE OPERATIONEN MIT DEKODIERUNG =====
@@ -52,7 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         getSystemInfo: () => ipcRenderer.invoke('get-system-info')
     },
 
-    // ===== EVENT LISTENERS - WARENEINLAGERUNG =====
+    // ===== EVENT LISTENERS - QUALITÄTSKONTROLLE =====
     on: (channel, callback) => {
         const validChannels = [
             'system-ready',
@@ -63,7 +81,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'session-timer-update', // Timer-Updates für Sessions
             'rfid-scan-error',
             'qr-scan-detected',
-            'decoding-stats-updated'
+            'decoding-stats-updated',
+            'qc-step-started',      // QC-Schritt wurde gestartet
+            'qc-step-completed',    // QC-Schritt wurde abgeschlossen
+            'qc-step-aborted'       // QC-Schritt wurde abgebrochen
         ];
 
         if (validChannels.includes(channel)) {
@@ -86,7 +107,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
             'session-timer-update',
             'rfid-scan-error',
             'qr-scan-detected',
-            'decoding-stats-updated'
+            'decoding-stats-updated',
+            'qc-step-started',
+            'qc-step-completed',
+            'qc-step-aborted'
         ];
 
         if (validChannels.includes(channel)) {
@@ -118,7 +142,7 @@ contextBridge.exposeInMainWorld('cameraAPI', {
     }
 });
 
-// ===== ERWEITERTE UTILITY FUNKTIONEN FÜR WARENEINLAGERUNG =====
+// ===== ERWEITERTE UTILITY FUNKTIONEN FÜR QUALITÄTSKONTROLLE =====
 contextBridge.exposeInMainWorld('utils', {
     // ===== ZEIT & DATUM FORMATIERUNG =====
     formatDuration: (seconds) => {
@@ -236,6 +260,24 @@ contextBridge.exposeInMainWorld('utils', {
             return Math.max(0, Math.floor(diffMs / 1000));
         } catch (error) {
             console.error('Fehler bei Session-Duration-Berechnung:', error);
+            return 0;
+        }
+    },
+
+    // ===== QC-SPEZIFISCHE DURATION BERECHNUNG =====
+    calculateQCStepDuration: (startTime, endTime = null) => {
+        try {
+            const start = new Date(startTime);
+            const end = endTime ? new Date(endTime) : new Date();
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return 0;
+            }
+
+            const diffMs = end.getTime() - start.getTime();
+            return Math.max(0, Math.floor(diffMs / 1000));
+        } catch (error) {
+            console.error('Fehler bei QC-Step-Duration-Berechnung:', error);
             return 0;
         }
     },
@@ -415,16 +457,16 @@ contextBridge.exposeInMainWorld('utils', {
 
         // Icon und Titel basierend auf verfügbaren Daten
         let icon = '📄';
-        let title = 'Paketdaten';
+        let title = 'QC-Prüfobjekt';
         let quality = 'minimal';
 
         if (auftrags_nr && paket_nr) {
-            icon = '📦';
-            title = 'Vollständige Paketinformationen';
+            icon = '🔍';
+            title = 'Vollständige Prüfdaten';
             quality = 'complete';
         } else if (auftrags_nr || paket_nr) {
             icon = '📋';
-            title = 'Teilweise Paketinformationen';
+            title = 'Teilweise Prüfdaten';
             quality = 'partial';
         } else if (kunden_name) {
             icon = '👤';
@@ -456,7 +498,7 @@ contextBridge.exposeInMainWorld('utils', {
     },
 
     /**
-     * Validiert dekodierte QR-Code Daten
+     * Validiert dekodierte QR-Code Daten für QC
      * @param {Object} decoded - Dekodierte Daten
      * @returns {Object} - Validierungsergebnis
      */
@@ -467,7 +509,8 @@ contextBridge.exposeInMainWorld('utils', {
             hasPaket: false,
             hasKunde: false,
             completeness: 0,
-            issues: []
+            issues: [],
+            qcSuitability: 'poor' // poor, fair, good, excellent
         };
 
         if (!decoded || typeof decoded !== 'object') {
@@ -507,9 +550,63 @@ contextBridge.exposeInMainWorld('utils', {
         if (validation.hasKunde) completenessScore += 20;
 
         validation.completeness = completenessScore;
+
+        // QC-Eignung bewerten
+        if (completenessScore >= 80) {
+            validation.qcSuitability = 'excellent';
+        } else if (completenessScore >= 60) {
+            validation.qcSuitability = 'good';
+        } else if (completenessScore >= 40) {
+            validation.qcSuitability = 'fair';
+        } else {
+            validation.qcSuitability = 'poor';
+        }
+
+        // Für QC ist mindestens Auftrag oder Paket erforderlich
         validation.isValid = validation.hasAuftrag || validation.hasPaket;
 
         return validation;
+    },
+
+    /**
+     * Überprüft QC-Schritt Status
+     * @param {Object} qcStep - QC-Schritt Daten
+     * @returns {Object} - Status-Informationen
+     */
+    getQCStepStatus: (qcStep) => {
+        if (!qcStep) {
+            return {
+                status: 'unknown',
+                stage: 'unknown',
+                icon: '❓',
+                description: 'Unbekannter Status'
+            };
+        }
+
+        const { Completed, StartTime, EndTime } = qcStep;
+
+        if (Completed && EndTime) {
+            return {
+                status: 'completed',
+                stage: 'finished',
+                icon: '✅',
+                description: 'Abgeschlossen'
+            };
+        } else if (StartTime && !EndTime) {
+            return {
+                status: 'active',
+                stage: 'in_progress',
+                icon: '🔄',
+                description: 'Läuft - Warte auf Ausgang'
+            };
+        } else {
+            return {
+                status: 'pending',
+                stage: 'waiting',
+                icon: '⏳',
+                description: 'Wartend'
+            };
+        }
     },
 
     parseQRPayload: (payload) => {
@@ -537,7 +634,8 @@ contextBridge.exposeInMainWorld('utils', {
                     data: decoded,
                     display: formatted.summary,
                     preview: formatted.title,
-                    formatted: formatted
+                    formatted: formatted,
+                    qcSuitability: this.validateDecodedData(decoded).qcSuitability
                 };
             }
 
@@ -637,13 +735,14 @@ contextBridge.exposeInMainWorld('utils', {
         }
     },
 
-    // ===== SCAN RESULT HANDLING MIT DEKODIERUNG =====
-    formatScanResult: (result) => {
+    // ===== QC-SCAN RESULT HANDLING =====
+    formatQCScanResult: (result) => {
         if (!result || typeof result !== 'object') {
             return {
                 success: false,
-                message: 'Ungültiges Scan-Ergebnis',
-                status: 'error'
+                message: 'Ungültiges QC-Scan-Ergebnis',
+                status: 'error',
+                qcStage: 'unknown'
             };
         }
 
@@ -652,6 +751,7 @@ contextBridge.exposeInMainWorld('utils', {
         let formattedMessage = message || 'Unbekannter Status';
         let displayType = status || 'unknown';
         let decodedSummary = null;
+        let qcStage = 'unknown'; // entrance, exit, unknown
 
         // Dekodierte Daten extrahieren falls verfügbar
         if (data && data.DecodedData) {
@@ -665,27 +765,45 @@ contextBridge.exposeInMainWorld('utils', {
             }
         }
 
-        // Status-spezifische Formatierung
+        // QC-spezifische Status-Formatierung
         switch (status) {
+            case 'qc_entrance_saved':
+                qcStage = 'entrance';
+                displayType = 'success';
+                formattedMessage = 'Eingang erfasst - QC-Prüfung gestartet';
+                if (decodedSummary) {
+                    formattedMessage += ` (${decodedSummary})`;
+                }
+                break;
+
+            case 'qc_exit_saved':
+                qcStage = 'exit';
+                displayType = 'success';
+                formattedMessage = 'Ausgang erfasst - QC-Prüfung abgeschlossen';
+                if (decodedSummary) {
+                    formattedMessage += ` (${decodedSummary})`;
+                }
+                break;
+
             case 'duplicate_cache':
             case 'duplicate_database':
             case 'duplicate_transaction':
                 if (duplicateInfo && duplicateInfo.minutesAgo !== undefined) {
-                    formattedMessage = `Bereits vor ${duplicateInfo.minutesAgo} Minuten gescannt`;
+                    formattedMessage = `QC-Duplikat: Bereits vor ${duplicateInfo.minutesAgo} Minuten gescannt`;
                 } else if (duplicateInfo && duplicateInfo.count) {
-                    formattedMessage = `${duplicateInfo.count}x bereits gescannt`;
+                    formattedMessage = `QC-Duplikat: ${duplicateInfo.count}x bereits gescannt`;
                 }
                 displayType = 'duplicate';
                 break;
 
             case 'rate_limit':
-                formattedMessage = 'Zu viele Scans - kurz warten';
+                formattedMessage = 'QC-Rate-Limit: Zu viele Scans - kurz warten';
                 displayType = 'warning';
                 break;
 
             case 'saved':
                 if (data && data.ID) {
-                    formattedMessage = `Erfolgreich gespeichert (ID: ${data.ID})`;
+                    formattedMessage = `QC-Scan erfolgreich gespeichert (ID: ${data.ID})`;
                     if (decodedSummary) {
                         formattedMessage += ` - ${decodedSummary}`;
                     }
@@ -696,10 +814,12 @@ contextBridge.exposeInMainWorld('utils', {
             case 'error':
             case 'database_offline':
                 displayType = 'error';
+                formattedMessage = `QC-Fehler: ${formattedMessage}`;
                 break;
 
             case 'processing':
                 displayType = 'info';
+                formattedMessage = `QC-Verarbeitung: ${formattedMessage}`;
                 break;
         }
 
@@ -707,6 +827,7 @@ contextBridge.exposeInMainWorld('utils', {
             success: success || false,
             message: formattedMessage,
             status: displayType,
+            qcStage: qcStage,
             data: data || null,
             duplicateInfo: duplicateInfo || null,
             decodedSummary: decodedSummary,
@@ -725,7 +846,7 @@ contextBridge.exposeInMainWorld('utils', {
             userId: session.UserID,
             userName: session.UserName || 'Unbekannt',
             department: session.Department || '',
-            sessionType: session.SessionTypeName || 'Wareneinlagerung',
+            sessionType: session.SessionTypeName || 'Qualitätskontrolle',
             startTime: session.StartTS || session.localStartTime,
             duration: duration,
             durationFormatted: this.formatDuration(duration),
@@ -750,6 +871,59 @@ contextBridge.exposeInMainWorld('utils', {
                 };
             }
             grouped[userId].sessions.push(this.formatSessionInfo(session));
+        });
+
+        return grouped;
+    },
+
+    // ===== QC-SPEZIFISCHE UTILITIES =====
+
+    /**
+     * Formatiert QC-Schritt für UI-Anzeige
+     * @param {Object} qcStep - QC-Schritt Daten
+     * @returns {Object} - Formatierte QC-Schritt Informationen
+     */
+    formatQCStep: (qcStep) => {
+        if (!qcStep) return null;
+
+        const statusInfo = this.getQCStepStatus(qcStep);
+        const duration = this.calculateQCStepDuration(qcStep.StartTime, qcStep.EndTime);
+
+        return {
+            id: qcStep.ID,
+            sessionId: qcStep.SessionID,
+            qrCode: qcStep.QrCode,
+            startTime: qcStep.StartTime,
+            endTime: qcStep.EndTime,
+            completed: qcStep.Completed,
+            duration: duration,
+            durationFormatted: this.formatDuration(duration),
+            status: statusInfo.status,
+            stage: statusInfo.stage,
+            icon: statusInfo.icon,
+            description: statusInfo.description,
+            startScanId: qcStep.StartScanID,
+            endScanId: qcStep.EndScanID
+        };
+    },
+
+    /**
+     * Gruppiert QC-Schritte nach Status
+     * @param {Array} qcSteps - Array von QC-Schritten
+     * @returns {Object} - Gruppierte QC-Schritte
+     */
+    groupQCStepsByStatus: (qcSteps) => {
+        const grouped = {
+            active: [],
+            completed: [],
+            pending: []
+        };
+
+        qcSteps.forEach(step => {
+            const formatted = this.formatQCStep(step);
+            if (formatted) {
+                grouped[formatted.status].push(formatted);
+            }
         });
 
         return grouped;
@@ -872,7 +1046,7 @@ contextBridge.exposeInMainWorld('utils', {
     // ===== LOGGING =====
     log: (level, message, data = null) => {
         const timestamp = new Date().toISOString();
-        const logMessage = `[${timestamp}] ${level.toUpperCase()}: ${message}`;
+        const logMessage = `[${timestamp}] QC-${level.toUpperCase()}: ${message}`;
 
         switch (level.toLowerCase()) {
             case 'error':
@@ -939,7 +1113,9 @@ contextBridge.exposeInMainWorld('config', {
             'UI_WINDOW_HEIGHT',
             'APP_DEBUG',
             'UI_THEME',
-            'UI_UPDATE_INTERVAL'
+            'UI_UPDATE_INTERVAL',
+            'QC_MAX_ACTIVE_STEPS',
+            'QC_STEP_TIMEOUT_MINUTES'
         ];
 
         if (allowedKeys.includes(key)) {
@@ -955,7 +1131,7 @@ contextBridge.exposeInMainWorld('config', {
     theme: {
         get: () => {
             try {
-                return localStorage.getItem('wareneinlagerung-theme') || 'auto';
+                return localStorage.getItem('quality-control-theme') || 'auto';
             } catch {
                 return 'auto';
             }
@@ -963,7 +1139,7 @@ contextBridge.exposeInMainWorld('config', {
 
         set: (theme) => {
             try {
-                localStorage.setItem('wareneinlagerung-theme', theme);
+                localStorage.setItem('quality-control-theme', theme);
                 document.body.className = document.body.className.replace(/theme-\w+/g, '');
 
                 if (theme === 'auto') {
@@ -1024,7 +1200,7 @@ contextBridge.exposeInMainWorld('diagnostics', {
                     try {
                         return {
                             available: typeof Storage !== 'undefined',
-                            theme: localStorage.getItem('wareneinlagerung-theme')
+                            theme: localStorage.getItem('quality-control-theme')
                         };
                     } catch {
                         return { available: false };
@@ -1060,16 +1236,16 @@ contextBridge.exposeInMainWorld('diagnostics', {
 
 // ===== INITIALIZATION =====
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Preload Script geladen, DOM bereit');
+    console.log('Preload Script für Qualitätskontrolle geladen, DOM bereit');
 
     // Theme initialisieren
-    const savedTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
+    const savedTheme = localStorage.getItem('quality-control-theme') || 'auto';
     config.theme.set(savedTheme);
 
     // System Theme Changes verfolgen
     if (window.matchMedia) {
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            const currentTheme = localStorage.getItem('wareneinlagerung-theme') || 'auto';
+            const currentTheme = localStorage.getItem('quality-control-theme') || 'auto';
             if (currentTheme === 'auto') {
                 config.theme.set('auto'); // Theme neu anwenden
             }
@@ -1087,7 +1263,7 @@ document.addEventListener('DOMContentLoaded', () => {
             timestamp: new Date().toISOString()
         };
 
-        console.error('Global Error:', errorInfo);
+        console.error('Global QC Error:', errorInfo);
         utils.log('error', 'Global JavaScript Error', errorInfo);
     });
 
@@ -1099,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
             timestamp: new Date().toISOString()
         };
 
-        console.error('Unhandled Promise Rejection:', errorInfo);
+        console.error('Unhandled QC Promise Rejection:', errorInfo);
         utils.log('error', 'Unhandled Promise Rejection', errorInfo);
     });
 
@@ -1127,7 +1303,7 @@ document.addEventListener('DOMContentLoaded', () => {
         originalConsoleWarn.apply(console, args);
     };
 
-    console.log('✅ Preload Script erfolgreich initialisiert für Wareneinlagerung mit parallelen Sessions');
+    console.log('✅ Preload Script für Qualitätskontrolle mit parallelen Sessions erfolgreich initialisiert');
 });
 
-console.log('Preload Script für Wareneinlagerung mit parallelen Sessions geladen');
+console.log('Preload Script für Qualitätskontrolle mit QC-spezifischen APIs geladen');

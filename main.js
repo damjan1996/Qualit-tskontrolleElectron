@@ -18,6 +18,10 @@ const DatabaseClient = require('./db/db-client');
 // SessionTypes Setup-Funktionen importieren
 const { setupSessionTypes } = require('./db/constants/session-types');
 
+// QC-spezifische Module
+const QualityControlLogic = require('./logic/quality-control-logic');
+const QualityControlQueries = require('./db/quality-control-queries');
+
 // Simple RFID Listener laden (ohne native Dependencies)
 let SimpleRFIDListener;
 try {
@@ -28,17 +32,20 @@ try {
     console.log('💡 App läuft ohne RFID-Support');
 }
 
-class WareneinlagerungMainApp {
+class QualityControlMainApp {
     constructor() {
         this.mainWindow = null;
         this.rfidListener = null;
         this.dbClient = null;
+        this.qualityControlLogic = null;
+        this.qualityControlQueries = null;
 
         // Status-Tracking
         this.systemStatus = {
             database: false,
             rfid: false,
             sessionTypesSetup: false,
+            qualityControlSetup: false,
             lastError: null
         };
 
@@ -46,9 +53,13 @@ class WareneinlagerungMainApp {
         this.activeSessions = new Map(); // userId -> sessionData
         this.activeSessionTimers = new Map(); // sessionId -> timerInterval
 
+        // QC-spezifische Datenstrukturen
+        this.activeQCSteps = new Map(); // sessionId -> Set von QC-Step-IDs
+        this.qcStepCounters = new Map(); // sessionId -> { active: count, completed: count }
+
         // QR-Scan Rate Limiting (pro Session)
         this.qrScanRateLimit = new Map(); // sessionId -> scanTimes[]
-        this.maxQRScansPerMinute = 20;
+        this.maxQRScansPerMinute = 30; // Höher für QC
 
         // QR-Code Dekodierung Statistiken (global)
         this.decodingStats = {
@@ -63,8 +74,8 @@ class WareneinlagerungMainApp {
         this.lastRFIDScanTime = 0;
         this.rfidScanCooldown = 2000; // 2 Sekunden zwischen RFID-Scans
 
-        // SessionType Fallback-Konfiguration
-        this.sessionTypePriority = ['Wareneinlagerung', 'Wareneinlagerung'];
+        // SessionType für QC
+        this.sessionTypePriority = ['Qualitätskontrolle', 'Wareneinlagerung'];
 
         this.initializeApp();
     }
@@ -111,14 +122,14 @@ class WareneinlagerungMainApp {
     }
 
     createMainWindow() {
-        const windowWidth = parseInt(process.env.UI_WINDOW_WIDTH) || 1400;
-        const windowHeight = parseInt(process.env.UI_WINDOW_HEIGHT) || 900;
+        const windowWidth = parseInt(process.env.UI_WINDOW_WIDTH) || 1600;
+        const windowHeight = parseInt(process.env.UI_WINDOW_HEIGHT) || 1000;
 
         this.mainWindow = new BrowserWindow({
             width: windowWidth,
             height: windowHeight,
-            minWidth: 1200,
-            minHeight: 700,
+            minWidth: 1400,
+            minHeight: 800,
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
@@ -131,7 +142,7 @@ class WareneinlagerungMainApp {
                 hardwareAcceleration: false
             },
             show: false,
-            title: 'RFID Wareneinlagerung - Shirtful',
+            title: 'RFID Qualitätskontrolle - Shirtful',
             autoHideMenuBar: true,
             frame: true,
             titleBarStyle: 'default',
@@ -186,10 +197,13 @@ class WareneinlagerungMainApp {
     }
 
     async initializeComponents() {
-        console.log('🔄 Initialisiere Systemkomponenten...');
+        console.log('🔄 Initialisiere QC-Systemkomponenten...');
 
         // Datenbank zuerst
         await this.initializeDatabase();
+
+        // QC-Module initialisieren
+        await this.initializeQualityControl();
 
         // RFID-Listener (mit Fallback)
         await this.initializeRFID();
@@ -197,7 +211,7 @@ class WareneinlagerungMainApp {
         // System-Status an Renderer senden
         this.sendSystemStatus();
 
-        console.log('✅ Systemkomponenten initialisiert');
+        console.log('✅ QC-Systemkomponenten initialisiert');
     }
 
     async initializeDatabase() {
@@ -235,6 +249,39 @@ class WareneinlagerungMainApp {
                     '• SQL Server Verfügbarkeit'
                 );
             }
+        }
+    }
+
+    /**
+     * QC-spezifische Module initialisieren
+     */
+    async initializeQualityControl() {
+        try {
+            console.log('🔍 Initialisiere Qualitätskontrolle...');
+
+            if (!this.dbClient || !this.systemStatus.database) {
+                throw new Error('Datenbank nicht verfügbar für QC-Initialisierung');
+            }
+
+            // QC-Queries initialisieren
+            this.qualityControlQueries = new QualityControlQueries(this.dbClient);
+
+            // QC-Logic initialisieren
+            this.qualityControlLogic = new QualityControlLogic(this.dbClient, this.qualityControlQueries);
+
+            // QC-Datenbankschema erstellen/validieren
+            await this.qualityControlQueries.setupQCSchema();
+
+            this.systemStatus.qualityControlSetup = true;
+            console.log('✅ Qualitätskontrolle erfolgreich initialisiert');
+
+        } catch (error) {
+            this.systemStatus.qualityControlSetup = false;
+            this.systemStatus.lastError = `QC Setup: ${error.message}`;
+            console.error('❌ QC-Initialisierung fehlgeschlagen:', error);
+
+            // Nicht kritisch genug um das System zu stoppen
+            console.warn('⚠️ System startet ohne vollständige QC-Funktionalität');
         }
     }
 
@@ -283,11 +330,14 @@ class WareneinlagerungMainApp {
     }
 
     /**
-     * Aktualisiert die SessionType-Priorität basierend auf verfügbaren Types
+     * Aktualisiert die SessionType-Priorität basierend auf verfügbaren Types (QC-fokussiert)
      * @param {Array} availableSessionTypes - Verfügbare SessionTypes aus der DB
      */
     updateSessionTypePriority(availableSessionTypes) {
         const availableTypeNames = availableSessionTypes.map(type => type.TypeName);
+
+        // QC-fokussierte Priorität
+        this.sessionTypePriority = ['Qualitätskontrolle'];
 
         // Filtere nur verfügbare SessionTypes und behalte die Prioritätsreihenfolge bei
         this.sessionTypePriority = this.sessionTypePriority.filter(typeName =>
@@ -301,7 +351,7 @@ class WareneinlagerungMainApp {
             }
         });
 
-        console.log(`🔧 SessionType-Priorität aktualisiert: [${this.sessionTypePriority.join(', ')}]`);
+        console.log(`🔧 QC-SessionType-Priorität aktualisiert: [${this.sessionTypePriority.join(', ')}]`);
     }
 
     async loadDecodingStats() {
@@ -319,7 +369,7 @@ class WareneinlagerungMainApp {
                     decodingSuccessRate: stats.DecodingSuccessRate || 0
                 };
 
-                console.log('📋 QR-Code Dekodierung Statistiken geladen:', this.decodingStats);
+                console.log('📋 QC-QR-Code Dekodierung Statistiken geladen:', this.decodingStats);
             }
         } catch (error) {
             console.error('Fehler beim Laden der Dekodierung-Statistiken:', error);
@@ -362,7 +412,7 @@ class WareneinlagerungMainApp {
     }
 
     /**
-     * NEUE HILFSFUNKTION: Session mit Fallback erstellen
+     * NEUE HILFSFUNKTION: Session mit Fallback erstellen (QC-fokussiert)
      * Versucht verschiedene SessionTypes in Prioritätsreihenfolge
      * @param {number} userId - Benutzer ID
      * @param {Array} sessionTypePriority - Prioritätsliste der SessionTypes (optional)
@@ -379,12 +429,12 @@ class WareneinlagerungMainApp {
 
         for (const sessionType of typesToTry) {
             try {
-                console.log(`🔄 Versuche SessionType: ${sessionType}`);
+                console.log(`🔄 Versuche QC-SessionType: ${sessionType}`);
                 const session = await this.dbClient.createSession(userId, sessionType);
 
                 if (session) {
                     const fallbackUsed = sessionType !== typesToTry[0];
-                    console.log(`✅ Session erfolgreich erstellt mit SessionType: ${sessionType}${fallbackUsed ? ' (Fallback)' : ''}`);
+                    console.log(`✅ QC-Session erfolgreich erstellt mit SessionType: ${sessionType}${fallbackUsed ? ' (Fallback)' : ''}`);
 
                     return {
                         session,
@@ -393,14 +443,14 @@ class WareneinlagerungMainApp {
                     };
                 }
             } catch (error) {
-                console.warn(`⚠️ SessionType '${sessionType}' nicht verfügbar: ${error.message}`);
+                console.warn(`⚠️ QC-SessionType '${sessionType}' nicht verfügbar: ${error.message}`);
                 lastError = error;
                 continue;
             }
         }
 
         // Wenn alle SessionTypes fehlschlagen
-        throw new Error(`Alle SessionTypes fehlgeschlagen. Letzter Fehler: ${lastError?.message || 'Unbekannt'}`);
+        throw new Error(`Alle QC-SessionTypes fehlgeschlagen. Letzter Fehler: ${lastError?.message || 'Unbekannt'}`);
     }
 
     setupIPCHandlers() {
@@ -462,7 +512,7 @@ class WareneinlagerungMainApp {
                     throw new Error('Datenbank nicht verbunden');
                 }
 
-                // Session mit Fallback erstellen
+                // QC-Session mit Fallback erstellen
                 const { session, sessionTypeName, fallbackUsed } = await this.createSessionWithFallback(userId);
 
                 if (session) {
@@ -474,6 +524,10 @@ class WareneinlagerungMainApp {
                         lastActivity: new Date(),
                         sessionType: sessionTypeName
                     });
+
+                    // QC-spezifische Initialisierung
+                    this.activeQCSteps.set(session.ID, new Set());
+                    this.qcStepCounters.set(session.ID, { active: 0, completed: 0 });
 
                     // Session-Timer starten
                     this.startSessionTimer(session.ID, userId);
@@ -489,7 +543,7 @@ class WareneinlagerungMainApp {
                         FallbackUsed: fallbackUsed
                     };
 
-                    console.log(`Session erstellt für ${sessionTypeName}:`, normalizedSession);
+                    console.log(`QC-Session erstellt für ${sessionTypeName}:`, normalizedSession);
 
                     if (fallbackUsed) {
                         console.warn(`⚠️ Fallback SessionType '${sessionTypeName}' verwendet`);
@@ -500,7 +554,7 @@ class WareneinlagerungMainApp {
 
                 return null;
             } catch (error) {
-                console.error('Session Create Fehler:', error);
+                console.error('QC-Session Create Fehler:', error);
                 return null;
             }
         });
@@ -509,6 +563,11 @@ class WareneinlagerungMainApp {
             try {
                 if (!this.dbClient || !this.systemStatus.database) {
                     return false;
+                }
+
+                // QC-Schritte für Session beenden vor Restart
+                if (this.qualityControlLogic) {
+                    await this.qualityControlLogic.abortActiveStepsForSession(sessionId);
                 }
 
                 // Session in Datenbank neu starten (StartTime aktualisieren)
@@ -525,15 +584,19 @@ class WareneinlagerungMainApp {
                     localSession.lastActivity = new Date();
                 }
 
+                // QC-spezifische Reset
+                this.activeQCSteps.set(sessionId, new Set());
+                this.qcStepCounters.set(sessionId, { active: 0, completed: 0 });
+
                 // Session-Timer neu starten
                 this.stopSessionTimer(sessionId);
                 this.startSessionTimer(sessionId, userId);
 
-                console.log(`Session ${sessionId} für Benutzer ${userId} neu gestartet`);
+                console.log(`QC-Session ${sessionId} für Benutzer ${userId} neu gestartet`);
                 return true;
 
             } catch (error) {
-                console.error('Session Restart Fehler:', error);
+                console.error('QC-Session Restart Fehler:', error);
                 return false;
             }
         });
@@ -544,11 +607,20 @@ class WareneinlagerungMainApp {
                     return false;
                 }
 
+                // QC-Schritte für Session beenden
+                if (this.qualityControlLogic) {
+                    await this.qualityControlLogic.abortActiveStepsForSession(sessionId);
+                }
+
                 const success = await this.dbClient.endSession(sessionId);
 
                 if (success) {
                     // Lokale Session-Daten entfernen
                     this.activeSessions.delete(userId);
+
+                    // QC-spezifische Bereinigung
+                    this.activeQCSteps.delete(sessionId);
+                    this.qcStepCounters.delete(sessionId);
 
                     // Session-Timer stoppen
                     this.stopSessionTimer(sessionId);
@@ -556,12 +628,12 @@ class WareneinlagerungMainApp {
                     // Rate Limit für Session zurücksetzen
                     this.qrScanRateLimit.delete(sessionId);
 
-                    console.log(`Session ${sessionId} für Benutzer ${userId} beendet`);
+                    console.log(`QC-Session ${sessionId} für Benutzer ${userId} beendet`);
                 }
 
                 return success;
             } catch (error) {
-                console.error('Session End Fehler:', error);
+                console.error('QC-Session End Fehler:', error);
                 return false;
             }
         });
@@ -607,7 +679,7 @@ class WareneinlagerungMainApp {
                     this.updateSessionActivity(sessionId);
                 }
 
-                console.log(`QR-Scan Ergebnis für Session ${sessionId}:`, {
+                console.log(`QC-QR-Scan Ergebnis für Session ${sessionId}:`, {
                     success: result.success,
                     status: result.status,
                     message: result.message,
@@ -617,7 +689,7 @@ class WareneinlagerungMainApp {
                 return result;
 
             } catch (error) {
-                console.error('QR Scan Save unerwarteter Fehler:', error);
+                console.error('QC-QR Scan Save unerwarteter Fehler:', error);
                 return {
                     success: false,
                     status: 'error',
@@ -625,6 +697,103 @@ class WareneinlagerungMainApp {
                     data: null,
                     timestamp: new Date().toISOString()
                 };
+            }
+        });
+
+        // ===== QUALITÄTSKONTROLLE OPERATIONEN =====
+        ipcMain.handle('quality-control-start-step', async (event, sessionId, qrCode, scanId) => {
+            try {
+                if (!this.qualityControlLogic) {
+                    throw new Error('Qualitätskontrolle nicht verfügbar');
+                }
+
+                const qcStep = await this.qualityControlLogic.startQCStep(sessionId, qrCode, scanId);
+
+                if (qcStep) {
+                    // Lokale Tracking-Updates
+                    const activeSteps = this.activeQCSteps.get(sessionId) || new Set();
+                    activeSteps.add(qcStep.ID);
+                    this.activeQCSteps.set(sessionId, activeSteps);
+
+                    const counters = this.qcStepCounters.get(sessionId) || { active: 0, completed: 0 };
+                    counters.active++;
+                    this.qcStepCounters.set(sessionId, counters);
+
+                    console.log(`✅ QC-Schritt ${qcStep.ID} gestartet für Session ${sessionId}`);
+                }
+
+                return qcStep;
+            } catch (error) {
+                console.error('QC-Start-Step Fehler:', error);
+                return null;
+            }
+        });
+
+        ipcMain.handle('quality-control-complete-step', async (event, sessionId, qrCode, scanId) => {
+            try {
+                if (!this.qualityControlLogic) {
+                    throw new Error('Qualitätskontrolle nicht verfügbar');
+                }
+
+                const completedStep = await this.qualityControlLogic.completeQCStep(sessionId, qrCode, scanId);
+
+                if (completedStep) {
+                    // Lokale Tracking-Updates
+                    const activeSteps = this.activeQCSteps.get(sessionId) || new Set();
+                    activeSteps.delete(completedStep.ID);
+                    this.activeQCSteps.set(sessionId, activeSteps);
+
+                    const counters = this.qcStepCounters.get(sessionId) || { active: 0, completed: 0 };
+                    counters.active--;
+                    counters.completed++;
+                    this.qcStepCounters.set(sessionId, counters);
+
+                    console.log(`✅ QC-Schritt ${completedStep.ID} abgeschlossen für Session ${sessionId}`);
+                }
+
+                return completedStep;
+            } catch (error) {
+                console.error('QC-Complete-Step Fehler:', error);
+                return null;
+            }
+        });
+
+        ipcMain.handle('quality-control-get-active-steps', async (event, sessionId) => {
+            try {
+                if (!this.qualityControlQueries) {
+                    return [];
+                }
+
+                return await this.qualityControlQueries.getActiveQCStepsForSession(sessionId);
+            } catch (error) {
+                console.error('QC-Get-Active-Steps Fehler:', error);
+                return [];
+            }
+        });
+
+        ipcMain.handle('quality-control-get-completed-today', async (event, sessionId) => {
+            try {
+                if (!this.qualityControlQueries) {
+                    return [];
+                }
+
+                return await this.qualityControlQueries.getCompletedQCStepsToday(sessionId);
+            } catch (error) {
+                console.error('QC-Get-Completed-Today Fehler:', error);
+                return [];
+            }
+        });
+
+        ipcMain.handle('quality-control-get-step-details', async (event, stepId) => {
+            try {
+                if (!this.qualityControlQueries) {
+                    return null;
+                }
+
+                return await this.qualityControlQueries.getQCStepDetails(stepId);
+            } catch (error) {
+                console.error('QC-Get-Step-Details Fehler:', error);
+                return null;
             }
         });
 
@@ -682,6 +851,7 @@ class WareneinlagerungMainApp {
                 database: this.systemStatus.database,
                 rfid: this.systemStatus.rfid,
                 sessionTypesSetup: this.systemStatus.sessionTypesSetup,
+                qualityControlSetup: this.systemStatus.qualityControlSetup,
                 lastError: this.systemStatus.lastError,
                 activeSessions: Array.from(this.activeSessions.values()),
                 activeSessionCount: this.activeSessions.size,
@@ -689,7 +859,9 @@ class WareneinlagerungMainApp {
                 uptime: Math.floor(process.uptime()),
                 timestamp: new Date().toISOString(),
                 qrScanStats: this.getQRScanStats(),
-                decodingStats: this.decodingStats
+                decodingStats: this.decodingStats,
+                activeQCSteps: this.getTotalActiveQCSteps(),
+                completedQCStepsToday: await this.getTotalCompletedQCStepsToday()
             };
         });
 
@@ -701,13 +873,16 @@ class WareneinlagerungMainApp {
                 platform: process.platform,
                 arch: process.arch,
                 env: process.env.NODE_ENV || 'production',
-                type: 'wareneinlagerung',
+                type: 'quality-control',
                 features: {
                     qrDecoding: true,
                     parallelSessions: true,
                     sessionRestart: true,
                     sessionTypeFallback: true,
                     sessionTypesSetup: this.systemStatus.sessionTypesSetup,
+                    qualityControl: this.systemStatus.qualityControlSetup,
+                    qcStepTracking: true,
+                    qcEntranceExit: true,
                     decodingFormats: ['caret_separated', 'pattern_matching', 'structured_data'],
                     supportedFields: ['auftrags_nr', 'paket_nr', 'kunden_name']
                 }
@@ -801,7 +976,30 @@ class WareneinlagerungMainApp {
         }
     }
 
-    // ===== VERBESSERTE RFID-VERARBEITUNG MIT FALLBACK =====
+    // ===== QC-SPEZIFISCHE HILFSFUNKTIONEN =====
+    getTotalActiveQCSteps() {
+        let total = 0;
+        for (const [sessionId, activeSteps] of this.activeQCSteps.entries()) {
+            total += activeSteps.size;
+        }
+        return total;
+    }
+
+    async getTotalCompletedQCStepsToday() {
+        try {
+            if (!this.qualityControlQueries) {
+                return 0;
+            }
+
+            const result = await this.qualityControlQueries.getCompletedQCStepsCountToday();
+            return result || 0;
+        } catch (error) {
+            console.error('Fehler beim Abrufen der heute abgeschlossenen QC-Schritte:', error);
+            return 0;
+        }
+    }
+
+    // ===== VERBESSERTE RFID-VERARBEITUNG MIT QC-FALLBACK =====
     async handleRFIDScan(tagId) {
         const now = Date.now();
 
@@ -837,8 +1035,13 @@ class WareneinlagerungMainApp {
             const existingSession = this.activeSessions.get(user.ID);
 
             if (existingSession) {
-                // ===== SESSION-RESTART: Timer zurücksetzen =====
-                console.log(`🔄 Session-Restart für ${user.BenutzerName} (Session ${existingSession.sessionId})`);
+                // ===== QC-SESSION-RESTART: Timer und QC-Status zurücksetzen =====
+                console.log(`🔄 QC-Session-Restart für ${user.BenutzerName} (Session ${existingSession.sessionId})`);
+
+                // QC-Schritte für Session beenden vor Restart
+                if (this.qualityControlLogic) {
+                    await this.qualityControlLogic.abortActiveStepsForSession(existingSession.sessionId);
+                }
 
                 // Session in Datenbank neu starten
                 const restartSuccess = await this.dbClient.query(`
@@ -852,6 +1055,10 @@ class WareneinlagerungMainApp {
                     existingSession.startTime = new Date();
                     existingSession.lastActivity = new Date();
 
+                    // QC-spezifische Reset
+                    this.activeQCSteps.set(existingSession.sessionId, new Set());
+                    this.qcStepCounters.set(existingSession.sessionId, { active: 0, completed: 0 });
+
                     // Session-Timer neu starten
                     this.stopSessionTimer(existingSession.sessionId);
                     this.startSessionTimer(existingSession.sessionId, user.ID);
@@ -860,24 +1067,24 @@ class WareneinlagerungMainApp {
                     this.sendToRenderer('session-restarted', {
                         user,
                         sessionId: existingSession.sessionId,
-                        sessionType: existingSession.sessionType || 'Unbekannt',
+                        sessionType: existingSession.sessionType || 'Qualitätskontrolle',
                         newStartTime: existingSession.startTime.toISOString(),
                         timestamp: new Date().toISOString(),
                         source: 'rfid_scan'
                     });
 
-                    console.log(`✅ Session erfolgreich neu gestartet für ${user.BenutzerName}`);
+                    console.log(`✅ QC-Session erfolgreich neu gestartet für ${user.BenutzerName}`);
                 } else {
                     this.sendToRenderer('rfid-scan-error', {
                         tagId,
-                        message: 'Fehler beim Session-Restart',
+                        message: 'Fehler beim QC-Session-Restart',
                         timestamp: new Date().toISOString()
                     });
                 }
 
             } else {
-                // ===== NEUE SESSION ERSTELLEN MIT FALLBACK =====
-                console.log(`🔑 Neue Session für ${user.BenutzerName}...`);
+                // ===== NEUE QC-SESSION ERSTELLEN MIT FALLBACK =====
+                console.log(`🔑 Neue QC-Session für ${user.BenutzerName}...`);
 
                 try {
                     const { session, sessionTypeName, fallbackUsed } = await this.createSessionWithFallback(user.ID);
@@ -891,6 +1098,10 @@ class WareneinlagerungMainApp {
                             lastActivity: new Date(),
                             sessionType: sessionTypeName
                         });
+
+                        // QC-spezifische Initialisierung
+                        this.activeQCSteps.set(session.ID, new Set());
+                        this.qcStepCounters.set(session.ID, { active: 0, completed: 0 });
 
                         // Session-Timer starten
                         this.startSessionTimer(session.ID, user.ID);
@@ -915,10 +1126,10 @@ class WareneinlagerungMainApp {
                             isNewSession: true
                         });
 
-                        console.log(`✅ Neue Session erstellt für ${user.BenutzerName} (Session ${session.ID}, Type: ${sessionTypeName})`);
+                        console.log(`✅ Neue QC-Session erstellt für ${user.BenutzerName} (Session ${session.ID}, Type: ${sessionTypeName})`);
 
                         if (fallbackUsed) {
-                            console.warn(`⚠️ Fallback SessionType '${sessionTypeName}' verwendet - primärer SessionType nicht verfügbar`);
+                            console.warn(`⚠️ Fallback SessionType '${sessionTypeName}' verwendet - primärer QC-SessionType nicht verfügbar`);
 
                             // Warnung an Renderer senden
                             this.sendToRenderer('session-fallback-warning', {
@@ -931,11 +1142,11 @@ class WareneinlagerungMainApp {
                         }
                     }
                 } catch (sessionError) {
-                    console.error(`❌ Konnte keine Session erstellen für ${user.BenutzerName}:`, sessionError.message);
+                    console.error(`❌ Konnte keine QC-Session erstellen für ${user.BenutzerName}:`, sessionError.message);
 
                     this.sendToRenderer('rfid-scan-error', {
                         tagId,
-                        message: `Keine verfügbaren SessionTypes: ${sessionError.message}`,
+                        message: `Keine verfügbaren QC-SessionTypes: ${sessionError.message}`,
                         timestamp: new Date().toISOString(),
                         critical: true
                     });
@@ -980,7 +1191,7 @@ class WareneinlagerungMainApp {
                     (this.decodingStats.successfulDecodes / this.decodingStats.totalScans) * 100
                 );
 
-                console.log(`📊 Dekodierung-Statistiken aktualisiert:`, {
+                console.log(`📊 QC-Dekodierung-Statistiken aktualisiert:`, {
                     total: this.decodingStats.totalScans,
                     decoded: this.decodingStats.successfulDecodes,
                     rate: this.decodingStats.decodingSuccessRate + '%',
@@ -996,7 +1207,7 @@ class WareneinlagerungMainApp {
                 });
             }
         } catch (error) {
-            console.error('Fehler beim Aktualisieren der Dekodierung-Statistiken:', error);
+            console.error('Fehler beim Aktualisieren der QC-Dekodierung-Statistiken:', error);
         }
     }
 
@@ -1091,22 +1302,36 @@ class WareneinlagerungMainApp {
             database: this.systemStatus.database,
             rfid: this.systemStatus.rfid,
             sessionTypesSetup: this.systemStatus.sessionTypesSetup,
+            qualityControlSetup: this.systemStatus.qualityControlSetup,
             sessionTypePriority: this.sessionTypePriority,
             lastError: this.systemStatus.lastError,
             timestamp: new Date().toISOString(),
             decodingStats: this.decodingStats,
-            activeSessionCount: this.activeSessions.size
+            activeSessionCount: this.activeSessions.size,
+            activeQCSteps: this.getTotalActiveQCSteps()
         });
     }
 
     // ===== CLEANUP =====
     async cleanup() {
-        console.log('🧹 Anwendung wird bereinigt...');
+        console.log('🧹 QC-Anwendung wird bereinigt...');
 
         try {
             // Alle Session-Timer stoppen
             for (const sessionId of this.activeSessionTimers.keys()) {
                 this.stopSessionTimer(sessionId);
+            }
+
+            // Alle aktiven QC-Schritte beenden
+            if (this.qualityControlLogic) {
+                for (const [sessionId, activeSteps] of this.activeQCSteps.entries()) {
+                    try {
+                        await this.qualityControlLogic.abortActiveStepsForSession(sessionId);
+                        console.log(`QC-Schritte für Session ${sessionId} beendet`);
+                    } catch (error) {
+                        console.error(`Fehler beim Beenden der QC-Schritte für Session ${sessionId}:`, error);
+                    }
+                }
             }
 
             // Alle aktiven Sessions beenden
@@ -1123,6 +1348,8 @@ class WareneinlagerungMainApp {
             this.activeSessions.clear();
             this.activeSessionTimers.clear();
             this.qrScanRateLimit.clear();
+            this.activeQCSteps.clear();
+            this.qcStepCounters.clear();
 
             // Dekodierung-Statistiken zurücksetzen
             this.decodingStats = {
@@ -1148,16 +1375,16 @@ class WareneinlagerungMainApp {
                 this.dbClient = null;
             }
 
-            console.log('✅ Cleanup abgeschlossen');
+            console.log('✅ QC-Cleanup abgeschlossen');
 
         } catch (error) {
-            console.error('❌ Cleanup-Fehler:', error);
+            console.error('❌ QC-Cleanup-Fehler:', error);
         }
     }
 
     // ===== ERROR HANDLING =====
     handleGlobalError(error) {
-        console.error('Globaler Anwendungsfehler:', error);
+        console.error('Globaler QC-Anwendungsfehler:', error);
 
         this.sendToRenderer('system-error', {
             error: error.message,
@@ -1183,7 +1410,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ===== APP INSTANCE =====
-const wareneinlagerungApp = new WareneinlagerungMainApp();
+const qualityControlApp = new QualityControlMainApp();
 
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
@@ -1193,11 +1420,11 @@ if (!gotTheLock) {
 } else {
     app.on('second-instance', (event, commandLine, workingDirectory) => {
         // Someone tried to run a second instance, focus our window instead
-        if (wareneinlagerungApp.mainWindow) {
-            if (wareneinlagerungApp.mainWindow.isMinimized()) {
-                wareneinlagerungApp.mainWindow.restore();
+        if (qualityControlApp.mainWindow) {
+            if (qualityControlApp.mainWindow.isMinimized()) {
+                qualityControlApp.mainWindow.restore();
             }
-            wareneinlagerungApp.mainWindow.focus();
+            qualityControlApp.mainWindow.focus();
         }
     });
 }
