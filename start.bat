@@ -1,5 +1,5 @@
 @echo off
-echo Starte RFID QR Wareneingang...
+echo Starte RFID QR Wareneinlagerung...
 cd /d "%~dp0"
 pnpm start
 pause

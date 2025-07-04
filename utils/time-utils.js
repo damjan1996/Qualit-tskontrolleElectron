@@ -1,5 +1,5 @@
 /**
- * Zentrale Zeitbehandlungs-Utilities für RFID-Wareneingang
+ * Zentrale Zeitbehandlungs-Utilities für RFID-Wareneinlagerung
  * Behandelt alle Zeitstempel-Konvertierungen zwischen SQL Server und JavaScript
  */
 

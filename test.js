@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * RFID QR Wareneingang - Komponenten Test Script
+ * RFID QR Wareneinlagerung - Komponenten Test Script
  * Testet alle wichtigen Komponenten vor dem Produktiveinsatz
  */
 
@@ -21,7 +21,7 @@ class ComponentTester {
     }
 
     async runAllTests() {
-        console.log('🧪 RFID QR Wareneingang - Komponenten Tests');
+        console.log('🧪 RFID QR Wareneinlagerung - Komponenten Tests');
         console.log('===========================================');
         console.log();
 

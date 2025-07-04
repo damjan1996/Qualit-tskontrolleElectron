@@ -10,7 +10,7 @@
  */
 const SESSION_TYPES = {
     WARENEINLAGERUNG: 'Wareneinlagerung',  // Hauptfunktion der Anwendung
-    WARENEINGANG: 'Wareneingang',          // Alternative/Legacy
+    Wareneinlagerung: 'Wareneinlagerung',          // Alternative/Legacy
     QUALITAETSKONTROLLE: 'Qualitätskontrolle',
     KOMMISSIONIERUNG: 'Kommissionierung',
     INVENTUR: 'Inventur',
@@ -31,9 +31,9 @@ const SESSION_TYPE_CONFIG = {
         allowedQRTypes: ['decoded_qr', 'caret_separated', 'star_separated'],
         priority: 1
     },
-    [SESSION_TYPES.WARENEINGANG]: {
-        id: SESSION_TYPES.WARENEINGANG,
-        name: 'Wareneingang',
+    [SESSION_TYPES.Wareneinlagerung]: {
+        id: SESSION_TYPES.Wareneinlagerung,
+        name: 'Wareneinlagerung',
         description: 'Eingehende Waren scannen und verarbeiten - Legacy',
         icon: '📥',
         color: 'lightblue',
@@ -119,34 +119,34 @@ async function getWareneinlagerungSessionTypeId(dbClient) {
 }
 
 /**
- * Legacy: Helper-Funktion zum Erstellen einer Wareneingang-Session
+ * Legacy: Helper-Funktion zum Erstellen einer Wareneinlagerung-Session
  * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
  * @param {number} userId - Benutzer-ID
  * @returns {Object|null} - Neue Session oder null
  */
-async function createWareneingangSession(dbClient, userId) {
+async function createWareneinlagerungSession(dbClient, userId) {
     if (!dbClient.sessions) {
         throw new Error('DatabaseClient muss sessions module haben');
     }
-    return await dbClient.sessions.createSession(userId, SESSION_TYPES.WARENEINGANG);
+    return await dbClient.sessions.createSession(userId, SESSION_TYPES.Wareneinlagerung);
 }
 
 /**
- * Legacy: Helper-Funktion zum Abrufen der SessionType-ID für Wareneingang
+ * Legacy: Helper-Funktion zum Abrufen der SessionType-ID für Wareneinlagerung
  * @param {Object} dbClient - Datenbankverbindung (muss sessions module haben)
  * @returns {number|null} - SessionType ID oder null
  */
-async function getWareneingangSessionTypeId(dbClient) {
+async function getWareneinlagerungSessionTypeId(dbClient) {
     try {
         if (!dbClient.sessions) {
             throw new Error('DatabaseClient muss sessions module haben');
         }
 
         const types = await dbClient.sessions.getSessionTypes();
-        const wareneingang = types.find(type => type.TypeName === SESSION_TYPES.WARENEINGANG);
-        return wareneingang ? wareneingang.ID : null;
+        const Wareneinlagerung = types.find(type => type.TypeName === SESSION_TYPES.Wareneinlagerung);
+        return Wareneinlagerung ? Wareneinlagerung.ID : null;
     } catch (error) {
-        console.error('Fehler beim Abrufen der Wareneingang SessionType ID:', error);
+        console.error('Fehler beim Abrufen der Wareneinlagerung SessionType ID:', error);
         return null;
     }
 }
@@ -298,7 +298,7 @@ async function insertDefaultSessionTypes(dbConnection) {
                 description: 'Eingehende Waren scannen und einlagern - Hauptfunktion'
             },
             {
-                name: 'Wareneingang',
+                name: 'Wareneinlagerung',
                 description: 'Eingehende Waren scannen und verarbeiten - Legacy'
             },
             {
@@ -405,8 +405,8 @@ module.exports = {
     getWareneinlagerungSessionTypeId,
 
     // Helper Functions (Legacy)
-    createWareneingangSession,
-    getWareneingangSessionTypeId,
+    createWareneinlagerungSession,
+    getWareneinlagerungSessionTypeId,
 
     // General Helper Functions
     getSessionTypeConfig,

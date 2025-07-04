@@ -64,7 +64,7 @@ class WareneinlagerungMainApp {
         this.rfidScanCooldown = 2000; // 2 Sekunden zwischen RFID-Scans
 
         // SessionType Fallback-Konfiguration
-        this.sessionTypePriority = ['Wareneinlagerung', 'Wareneingang'];
+        this.sessionTypePriority = ['Wareneinlagerung', 'Wareneinlagerung'];
 
         this.initializeApp();
     }

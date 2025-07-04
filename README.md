@@ -1,8 +1,8 @@
-# 📦 Wareneingang RFID QR - Vereinfachte Version
+# 📦 Wareneinlagerung RFID QR - Vereinfachte Version
 
-**Moderne Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneingang**
+**Moderne Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung**
 
-Speziell optimiert für den Wareneingang bei Shirtful - Fokus auf einfache Bedienung und zuverlässige Funktion.
+Speziell optimiert für den Wareneinlagerung bei Shirtful - Fokus auf einfache Bedienung und zuverlässige Funktion.
 
 ## ✨ Hauptfeatures
 
@@ -12,7 +12,7 @@ Speziell optimiert für den Wareneingang bei Shirtful - Fokus auf einfache Bedie
 - **Ein Benutzer aktiv** - Fokus auf einzelne Arbeitsplätze
 - **Sofortige Ab-/Anmeldung** durch erneutes Tag-Scannen
 
-### 📸 QR-Code Wareneingang
+### 📸 QR-Code Wareneinlagerung
 - **Live-Kamera-Vorschau** mit optimierter Scan-Oberfläche
 - **Automatische QR-Erkennung** ohne manuellen Auslöser
 - **Duplikat-Vermeidung** (global + session-basiert)
@@ -53,7 +53,7 @@ Speziell optimiert für den Wareneingang bei Shirtful - Fokus auf einfache Bedie
 ### 1. Projekt einrichten
 ```bash
 # Repository klonen oder Dateien entpacken
-cd wareneingang-rfid-qr
+cd Wareneinlagerung-rfid-qr
 
 # Dependencies installieren
 npm install
@@ -246,7 +246,7 @@ npm run test-quick
 # Windows Installer erstellen
 npm run build:win
 
-# Ausgabe: dist/Wareneingang RFID QR Setup.exe
+# Ausgabe: dist/Wareneinlagerung RFID QR Setup.exe
 ```
 
 ### Datenbank-Wartung
@@ -308,7 +308,7 @@ await window.electronAPI.system.getStatus();
 | **QR-Zuordnung** | Manual/Round-Robin/Last | ✅ Automatisch an User |
 | **UI-Komplexität** | Viele Panels | ✅ Fokussierte Ansicht |
 | **Setup** | Manual | ✅ Guided Setup |
-| **Features** | Alle Module | ✅ Nur Wareneingang |
+| **Features** | Alle Module | ✅ Nur Wareneinlagerung |
 | **Performance** | 80-120 MB RAM | ✅ 60-90 MB RAM |
 | **Bedienung** | Komplex | ✅ Ein-Klick-Workflow |
 
@@ -347,13 +347,13 @@ await window.electronAPI.system.getStatus();
 
 ## 🏭 Shirtful Integration
 
-Diese Anwendung ist speziell für den Wareneingang bei Shirtful optimiert:
+Diese Anwendung ist speziell für den Wareneinlagerung bei Shirtful optimiert:
 
 - **Einfacher Workflow**: RFID scannen → QR-Codes erfassen
 - **Robuste Hardware-Integration**: Standard USB-Geräte
 - **Zuverlässige Datenerfassung**: Direkte SQL Server Anbindung
 - **Benutzerfreundlich**: Minimal-UI für effiziente Bedienung
 
-**Perfekt für**: Wareneingang, Qualitätskontrolle, Versand-Stationen
+**Perfekt für**: Wareneinlagerung, Qualitätskontrolle, Versand-Stationen
 
 ✅ **Produktionsbereit** - Sofort einsetzbar nach Setup!

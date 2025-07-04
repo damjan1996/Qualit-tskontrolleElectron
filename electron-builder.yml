@@ -1,10 +1,10 @@
 # =============================================================================
-# RFID QR Wareneingang - Electron Builder Konfiguration
+# RFID QR Wareneinlagerung - Electron Builder Konfiguration
 # =============================================================================
 
 # App Metadaten
-appId: com.shirtful.rfid-qr-wareneingang
-productName: "RFID QR Wareneingang"
+appId: com.shirtful.rfid-qr-Wareneinlagerung
+productName: "RFID QR Wareneinlagerung"
 copyright: "Copyright © 2024 Shirtful GmbH"
 
 # Verzeichnisse
@@ -46,7 +46,7 @@ compression: normal
 # Auto-Update Konfiguration (optional für zukünftige Versionen)
 publish:
   provider: generic
-  url: "https://updates.shirtful.com/rfid-qr-wareneingang/"
+  url: "https://updates.shirtful.com/rfid-qr-Wareneinlagerung/"
 
 # =============================================================================
 # WINDOWS KONFIGURATION
@@ -79,7 +79,7 @@ nsis:
   installerHeaderIcon: "build/installerHeader.ico"
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: "RFID QR Wareneingang"
+  shortcutName: "RFID QR Wareneinlagerung"
 
   # Installer Sprache
   language: "1031" # Deutsch
@@ -154,8 +154,8 @@ linux:
         - x64
   icon: "build/icon.png"
   category: Office
-  synopsis: "RFID QR Wareneingang System"
-  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneingang"
+  synopsis: "RFID QR Wareneinlagerung System"
+  description: "Desktop-Anwendung für RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung"
 
 # Linux AppImage
 appImage:
@@ -189,11 +189,11 @@ metadata:
     name: "Shirtful GmbH"
     email: "support@shirtful.com"
   homepage: "https://www.shirtful.com"
-  description: "RFID-basierte Zeiterfassung und QR-Code Wareneingang für moderne Produktionsbetriebe"
+  description: "RFID-basierte Zeiterfassung und QR-Code Wareneinlagerung für moderne Produktionsbetriebe"
   keywords:
     - "rfid"
     - "qr-code"
-    - "wareneingang"
+    - "Wareneinlagerung"
     - "zeiterfassung"
     - "electron"
     - "desktop"
@@ -212,7 +212,7 @@ protocols:
 fileAssociations:
   - ext: "rqr"
     name: "RFID QR Export"
-    description: "RFID QR Wareneingang Datenexport"
+    description: "RFID QR Wareneinlagerung Datenexport"
     icon: "build/fileIcon.ico"
 
 # Umgebungsvariablen für Build

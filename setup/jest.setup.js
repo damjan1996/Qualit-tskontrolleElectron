@@ -1,6 +1,6 @@
 // tests/setup/jest.setup.js
 /**
- * Jest Setup für RFID QR Wareneingang Tests
+ * Jest Setup für RFID QR Wareneinlagerung Tests
  * Globale Konfiguration und Mocks für alle Tests
  */
 
@@ -357,7 +357,7 @@ MSSQL_ENCRYPT=false
 MSSQL_TRUST_CERT=true
 `,
         'package.json': JSON.stringify({
-            name: 'wareneingang-rfid-qr',
+            name: 'Wareneinlagerung-rfid-qr',
             version: '1.0.0'
         }),
         'renderer/index.html': '<html><body><div id="app"></div></body></html>',

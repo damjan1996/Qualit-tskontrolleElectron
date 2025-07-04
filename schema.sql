@@ -126,7 +126,7 @@ CREATE TABLE ScannTyp (
 
 -- Standard-Scan-Typen einfügen
 INSERT INTO ScannTyp (Name, Description) VALUES
-                                             ('Wareneingang', 'Eingehende Pakete und Lieferungen'),
+                                             ('Wareneinlagerung', 'Eingehende Pakete und Lieferungen'),
                                              ('Wareneinlagerung', 'Einlagerung in Lagerplätze'),
                                              ('Qualitätsprüfung', 'Qualitätskontrolle der Waren'),
                                              ('Kommissionierung', 'Entnahme für Bestellungen'),

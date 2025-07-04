@@ -1,12 +1,12 @@
 @echo off
 REM ============================================================================
-REM Windows Console Fix Script für RFID QR Wareneingang
+REM Windows Console Fix Script für RFID QR Wareneinlagerung
 REM Behebt Unicode/Encoding-Probleme in der Windows-Konsole
 REM ============================================================================
 
 echo.
 echo ====================================================
-echo   RFID QR Wareneingang - Console Fix
+echo   RFID QR Wareneinlagerung - Console Fix
 echo   Behebt Windows Console Encoding Probleme
 echo ====================================================
 echo.

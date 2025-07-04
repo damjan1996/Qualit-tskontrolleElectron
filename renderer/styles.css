@@ -221,16 +221,21 @@ body {
 }
 
 .login-info {
-    background: linear-gradient(135deg, var(--primary-color), var(--info-color));
-    color: white;
+    background: linear-gradient(135deg, #4f46e5, #1e40af);
+    color: white !important;
     padding: var(--spacing-md);
     border-radius: var(--radius-lg);
     text-align: left;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: var(--shadow-md);
 }
 
 .login-info p {
     margin-bottom: var(--spacing-xs);
     font-size: var(--font-size-sm);
+    color: white !important;
+    font-weight: 500;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .login-info p:last-child {
